@@ -3,8 +3,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { ArrowLeft, Settings, Loader2, BookOpen, Sun, Moon, Sparkles, X } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { ArrowLeft, Loader2, BookOpen, Sun, Moon, Sparkles, X, ChevronRight } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function ReaderPage() {
   const { id } = useParams();
@@ -14,10 +14,9 @@ export default function ReaderPage() {
   const [loadingReader, setLoadingReader] = useState(true);
   const [isComfortMode, setIsComfortMode] = useState(false);
   
-  // Estados da IA
+  // Estados da IA Integrada
   const [selectedText, setSelectedText] = useState("");
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
-  const [showAiMenu, setShowAiMenu] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [aiResponse, setAiResponse] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
 
@@ -42,8 +41,6 @@ export default function ReaderPage() {
     }
 
     let isMounted = true;
-    let bookInstance: any = null;
-
     async function init() {
       try {
         const ePubModule = await import('epubjs');
@@ -53,7 +50,7 @@ export default function ReaderPage() {
         const buffer = await response.arrayBuffer();
 
         if (!isMounted) return;
-        bookInstance = ePub(buffer);
+        const bookInstance = ePub(buffer);
         await bookInstance.opened;
 
         const rendition = bookInstance.renderTo(viewerRef.current, {
@@ -61,52 +58,34 @@ export default function ReaderPage() {
         });
         renditionRef.current = rendition;
 
-        // INJEÇÃO DE CSS PARA PERMITIR SELEÇÃO
+        // Injeção de CSS para marcação de seleção visível
         rendition.hooks.content.register((contents: any) => {
           const style = contents.document.createElement("style");
           style.innerHTML = `
-            ::selection { background: rgba(0, 0, 0, 0.1) !important; }
-            * { -webkit-user-select: text !important; user-select: text !important; cursor: text !important; }
+            ::selection { background: rgba(0, 0, 0, 0.08) !important; color: inherit; }
+            * { -webkit-user-select: text !important; user-select: text !important; }
           `;
           contents.document.head.appendChild(style);
         });
 
-        // LÓGICA DE SELEÇÃO PARA IA
+        // Captura de seleção para a barra superior
         rendition.on("selected", (cfiRange: string, contents: any) => {
-          const selection = contents.window.getSelection();
-          const text = selection.toString().trim();
-          
-          if (text && text.length > 2) {
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            const iframeRect = viewerRef.current?.getBoundingClientRect();
-
-            if (iframeRect) {
-              setSelectedText(text);
-              setMenuPosition({
-                top: rect.top + iframeRect.top - 60,
-                left: rect.left + iframeRect.left + (rect.width / 2)
-              });
-              setShowAiMenu(true);
-            }
+          const text = contents.window.getSelection().toString().trim();
+          if (text.length > 2) {
+            setSelectedText(text);
           }
         });
 
-        rendition.on("click", () => setShowAiMenu(false));
+        rendition.on("click", () => {
+          if (!isDrawerOpen) setSelectedText("");
+        });
 
         bookInstance.ready.then(async () => {
           await bookInstance.locations.generate(1000);
-          if (isMounted) {
-            const totalLocs = bookInstance.locations.length();
-            const savedPage = book.current_page || 0;
-            const percentage = savedPage / (book.total_pages || totalLocs || 1);
-            if (percentage > 0 && percentage < 1) {
-              await rendition.display(bookInstance.locations.cfiFromPercentage(percentage));
-            } else {
-              await rendition.display();
-            }
-            setLoadingReader(false);
-          }
+          const savedPage = book.current_page || 0;
+          const percentage = savedPage / (book.total_pages || bookInstance.locations.length() || 1);
+          await rendition.display(bookInstance.locations.cfiFromPercentage(percentage > 0 ? percentage : 0));
+          setLoadingReader(false);
         });
 
         rendition.themes.default({
@@ -117,10 +96,8 @@ export default function ReaderPage() {
         });
 
         rendition.on("relocated", async (location: any) => {
-          if (!isMounted) return;
           const percent = bookInstance.locations.percentageFromCfi(location.start.cfi);
-          const totalLocs = bookInstance.locations.length();
-          const calculatedPage = Math.floor(percent * totalLocs) || 1;
+          const calculatedPage = Math.floor(percent * bookInstance.locations.length()) || 1;
           await supabase.from('books').update({ current_page: calculatedPage }).eq('id', id);
         });
       } catch (err) { setLoadingReader(false); }
@@ -129,92 +106,126 @@ export default function ReaderPage() {
     return () => { isMounted = false; renditionRef.current?.destroy(); };
   }, [isEpub, book, id]);
 
-  const handleAiAction = async (action: 'explain' | 'summarize') => {
-    setShowAiMenu(false);
+  const askAi = async () => {
+    setIsDrawerOpen(true);
     setLoadingAi(true);
-    setAiResponse("");
-
     try {
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: selectedText, action })
+        body: JSON.stringify({ text: selectedText, bookTitle: book.title, action: 'analyze' })
       });
       const data = await res.json();
       setAiResponse(data.result);
     } catch (error) {
-      setAiResponse("Erro ao consultar a IA.");
+      setAiResponse("O Mentor de Contexto está indisponível no momento.");
     } finally {
       setLoadingAi(false);
     }
   };
 
-  if (!book) return <div className="h-screen flex items-center justify-center bg-[#F8F9F7]"><Loader2 className="animate-spin text-stone-300" /></div>;
-
   return (
-    <div className={`h-screen flex flex-col transition-colors duration-500 ${isComfortMode ? 'bg-[#121212]' : 'bg-[#F8F9F7]'}`}>
+    <div className={`h-screen flex flex-col transition-colors duration-500 ${isComfortMode ? 'bg-[#121212]' : 'bg-[#F8F9F7]'} overflow-hidden`}>
       
-      {/* MENU FLUTUANTE IA (Z-INDEX ALTO) */}
-      {showAiMenu && (
-        <div 
-          className="fixed z-[100] bg-black text-white rounded-xl shadow-2xl flex items-center px-3 py-2 gap-3 border border-white/10"
-          style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px`, transform: 'translateX(-50%)' }}
-        >
-          <button onClick={() => handleAiAction('explain')} className="text-[9px] font-black uppercase tracking-widest flex items-center gap-2 hover:text-blue-400 transition-colors">
-              <Sparkles size={12} /> Explicar
-          </button>
-          <div className="w-[1px] h-3 bg-white/20" />
-          <button onClick={() => handleAiAction('summarize')} className="text-[9px] font-black uppercase tracking-widest hover:text-green-400 transition-colors">Resumir</button>
-        </div>
-      )}
-
-      {/* HEADER */}
+      {/* HEADER INTEGRADO */}
       <header className={`px-6 py-4 border-b flex justify-between items-center z-30 ${isComfortMode ? 'bg-[#1A1A1A] border-stone-800' : 'bg-white/80 backdrop-blur-md border-stone-200'}`}>
-        <button onClick={() => router.back()} className="p-2 text-stone-400 hover:text-black"><ArrowLeft size={20} /></button>
-        <h2 className={`text-[10px] font-black uppercase tracking-[0.2em] truncate max-w-[40%] ${isComfortMode ? 'text-stone-500' : 'text-stone-400'}`}>{book?.title}</h2>
-        <button onClick={() => {
-          setIsComfortMode(!isComfortMode);
-          renditionRef.current?.themes.select(!isComfortMode ? "comfort" : "default");
-        }} className={`p-2 rounded-full ${isComfortMode ? 'text-yellow-500' : 'text-stone-400'}`}>
-           {isComfortMode ? <Sun size={18} /> : <Moon size={18} />}
-        </button>
+        <div className="flex items-center gap-4">
+          <button onClick={() => router.back()} className="text-stone-400 hover:text-black transition-colors"><ArrowLeft size={20} /></button>
+          <h2 className={`text-[10px] font-black uppercase tracking-[0.2em] truncate max-w-[150px] ${isComfortMode ? 'text-stone-500' : 'text-stone-400'}`}>{book?.title}</h2>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <AnimatePresence>
+            {selectedText && (
+              <motion.button
+                initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}
+                onClick={askAi}
+                className="flex items-center gap-2 bg-black text-white px-3 py-1.5 rounded-full shadow-lg"
+              >
+                <Sparkles size={14} className="animate-pulse" />
+                <span className="text-[9px] font-black uppercase tracking-widest">Insight</span>
+              </motion.button>
+            )}
+          </AnimatePresence>
+          <button onClick={() => {
+            setIsComfortMode(!isComfortMode);
+            renditionRef.current?.themes.select(!isComfortMode ? "comfort" : "default");
+          }} className={`p-2 rounded-full ${isComfortMode ? 'text-yellow-500 bg-stone-800' : 'text-stone-400'}`}>
+             {isComfortMode ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+        </div>
       </header>
 
-      <main className="flex-1 relative flex items-center justify-center overflow-hidden">
-        {loadingReader && <div className="absolute inset-0 flex items-center justify-center z-50 bg-[#F8F9F7]"><BookOpen className="text-stone-200 animate-pulse" size={40} /></div>}
+      <main className="flex-1 relative flex items-center justify-center">
+        <div ref={viewerRef} className={`h-full w-full max-w-3xl relative transition-all ${isComfortMode ? 'bg-[#1A1A1A]' : 'bg-white shadow-sm'}`} />
         
-        <div ref={viewerRef} className={`h-full w-full max-w-3xl relative ${isComfortMode ? 'bg-[#1A1A1A]' : 'bg-white shadow-2xl'}`} />
-        
-        {/* ZONAS DE NAVEGAÇÃO LATERAIS REDUZIDAS */}
-        <div onClick={() => renditionRef.current?.prev()} className="absolute left-0 top-0 h-full w-[8%] z-40 cursor-w-resize" />
-        <div onClick={() => renditionRef.current?.next()} className="absolute right-0 top-0 h-full w-[8%] z-40 cursor-e-resize" />
+        {/* NAVEGAÇÃO LATERAL DISCRETA */}
+        <button onClick={() => renditionRef.current?.prev()} className="absolute left-0 h-full w-[10%] z-10 cursor-w-resize" />
+        <button onClick={() => renditionRef.current?.next()} className="absolute right-0 h-full w-[10%] z-10 cursor-e-resize" />
+
+        {/* DRAWER LATERAL DE INSIGHTS */}
+        <AnimatePresence>
+          {isDrawerOpen && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                onClick={() => setIsDrawerOpen(false)}
+                className="absolute inset-0 bg-black/20 backdrop-blur-[2px] z-[50]"
+              />
+              <motion.div 
+                initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+                transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                className={`absolute right-0 top-0 h-full w-full max-w-sm z-[60] shadow-2xl p-8 flex flex-col ${isComfortMode ? 'bg-[#1A1A1A] text-stone-300' : 'bg-white text-stone-800'}`}
+              >
+                <div className="flex justify-between items-center mb-8">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={16} className="text-stone-400" />
+                    <h3 className="text-[10px] font-black uppercase tracking-widest">Mentor de Contexto</h3>
+                  </div>
+                  <button onClick={() => setIsDrawerOpen(false)} className="p-2 hover:bg-stone-100 rounded-full transition-colors">
+                    <X size={20} className="text-stone-300" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-6 pr-2 custom-scrollbar">
+                  <div className="p-4 bg-stone-50 rounded-2xl border border-stone-100">
+                    <p className="text-[10px] font-bold text-stone-400 uppercase mb-2">Trecho Selecionado</p>
+                    <p className="text-sm italic font-serif leading-relaxed opacity-70">"{selectedText}"</p>
+                  </div>
+
+                  {loadingAi ? (
+                    <div className="flex flex-col items-center justify-center py-20 space-y-4">
+                      <Loader2 className="animate-spin text-stone-200" size={32} />
+                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Sincronizando Insights...</p>
+                    </div>
+                  ) : (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="prose prose-stone">
+                      <p className="font-serif text-lg leading-relaxed first-letter:text-3xl first-letter:font-bold">
+                        {aiResponse}
+                      </p>
+                    </motion.div>
+                  )}
+                </div>
+                
+                <button 
+                   onClick={() => setIsDrawerOpen(false)}
+                   className="mt-8 w-full py-4 bg-black text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-stone-800 transition-all"
+                >
+                  Continuar Leitura
+                </button>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       </main>
 
-      {/* MODAL DE RESPOSTA DA IA */}
-      {(loadingAi || aiResponse) && (
-        <div className="fixed inset-0 z-[110] bg-black/40 backdrop-blur-sm flex items-center justify-center p-6">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative">
-            <button onClick={() => {setAiResponse(""); setLoadingAi(false)}} className="absolute top-4 right-4 text-stone-300 hover:text-black"><X size={20} /></button>
-            <div className="flex items-center gap-2 mb-4">
-                <div className="bg-black p-1.5 rounded-lg"><Sparkles size={12} className="text-white" /></div>
-                <h3 className="text-[10px] font-black uppercase tracking-widest">Insight IA</h3>
-            </div>
-            {loadingAi ? (
-              <div className="flex flex-col items-center py-8"><Loader2 className="animate-spin text-stone-200" size={32} /></div>
-            ) : (
-              <div className="max-h-[50vh] overflow-y-auto text-stone-600 font-serif text-lg leading-relaxed italic">{aiResponse}</div>
-            )}
-          </motion.div>
+      {/* FOOTER MINIMALISTA */}
+      <footer className={`px-8 py-5 border-t flex items-center justify-between gap-6 transition-colors ${isComfortMode ? 'bg-[#1A1A1A] border-stone-800' : 'bg-white border-stone-100'}`}>
+        <span className={`text-[10px] font-black uppercase ${isComfortMode ? 'text-stone-500' : 'text-stone-800'}`}>Pág. {book?.current_page || 0}</span>
+        <div className="flex-1 max-w-xs h-1 bg-stone-100 rounded-full overflow-hidden">
+          <div className={`h-full transition-all duration-700 ${isComfortMode ? 'bg-stone-600' : 'bg-black'}`} style={{ width: `${((book?.current_page || 1) / (book?.total_pages || 100)) * 100}%` }} />
         </div>
-      )}
-
-      {/* FOOTER */}
-      <footer className={`px-8 py-5 border-t flex items-center justify-between gap-6 ${isComfortMode ? 'bg-[#1A1A1A] border-stone-800' : 'bg-white border-stone-100'}`}>
-        <span className={`text-[10px] font-black ${isComfortMode ? 'text-stone-400' : 'text-stone-800'}`}>Pág. {book?.current_page || 0}</span>
-        <div className="flex-1 max-w-xs h-1.5 bg-stone-200/20 rounded-full overflow-hidden">
-          <div className={`h-full bg-black transition-all duration-700 ${isComfortMode ? 'bg-stone-400' : 'bg-black'}`} style={{ width: `${((book?.current_page || 1) / (book?.total_pages || 100)) * 100}%` }} />
-        </div>
-        <span className={`text-[10px] font-black ${isComfortMode ? 'text-stone-400' : 'text-stone-800'}`}>{Math.round(((book?.current_page || 0) / (book?.total_pages || 1)) * 100)}%</span>
+        <span className={`text-[10px] font-black ${isComfortMode ? 'text-stone-500' : 'text-stone-800'}`}>{Math.round(((book?.current_page || 0) / (book?.total_pages || 1)) * 100)}%</span>
       </footer>
     </div>
   );

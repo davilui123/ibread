@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.102.1",
     "epubjs": "^0.3.88",
     "framer-motion": "^12.38.0",

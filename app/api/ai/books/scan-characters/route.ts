@@ -11,20 +11,26 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "system",
-          content: "Você deve responder apenas com JSON puro, sem explicações."
+          content: "Você é um analista literário. Você deve responder estritamente com um objeto JSON puro."
         },
         {
           role: "user",
-          content: `Liste 10 personagens do livro "${bookTitle}" de "${author}". Retorne um array JSON: [{"name": "Nome", "role": "Papel", "description": "Bio"}].`
+          content: `Liste os 10 personagens mais importantes do livro "${bookTitle}" de "${author}". 
+          Retorne um objeto JSON com uma chave chamada "characters" contendo um array de objetos com: "name", "role" e "description". 
+          Não inclua nenhum texto antes ou depois do JSON.`
         }
       ],
       model: "llama-3.1-8b-instant",
-      response_format: { type: "json_object" } // O Groq garante que venha JSON
+      response_format: { type: "json_object" }
     });
 
-    const rawContent = completion.choices[0]?.message?.content || "[]";
-    return NextResponse.json(JSON.parse(rawContent));
+    const rawContent = completion.choices[0]?.message?.content || '{"characters": []}';
+    const parsedData = JSON.parse(rawContent);
+    
+    // Retornamos apenas o array para manter a compatibilidade com o frontend
+    return NextResponse.json(parsedData.characters || []);
   } catch (error: any) {
-    return NextResponse.json([]);
+    console.error("Erro Scan Personagens:", error);
+    return NextResponse.json([]); // Retorna vazio em caso de erro para não travar o app
   }
 }

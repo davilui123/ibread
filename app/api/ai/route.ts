@@ -1,7 +1,7 @@
 import Groq from "groq-sdk";
 import { NextResponse } from "next/server";
 
-// Inicializa o Groq com a chave do ambiente
+// Inicializa o Groq com a chave do ambiente (certifique-se de que está na Vercel e .env.local)
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || "" });
 
 export async function POST(req: Request) {
@@ -9,31 +9,31 @@ export async function POST(req: Request) {
     const { text, bookTitle, action } = await req.json();
 
     if (!process.env.GROQ_API_KEY) {
-      return NextResponse.json({ error: "GROQ_API_KEY não configurada na Vercel" }, { status: 500 });
+      return NextResponse.json({ error: "GROQ_API_KEY não configurada." }, { status: 500 });
     }
 
     const completion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: "Você é um mentor literário sofisticado. Ajude o usuário a entender personagens e contextos de livros."
+          content: "Você é um mentor literário sofisticado do app IBRead. Sua missão é ajudar o leitor a entender profundamente a obra, sem dar spoilers."
         },
         {
           role: "user",
           content: action === 'persona' 
-            ? `Descreva brevemente o personagem "${text}" do livro "${bookTitle}". Fale sobre papel na trama e personalidade.`
-            : `Explique o contexto ou significado de "${text}" no livro "${bookTitle}".`
+            ? `Descreva detalhadamente o personagem "${text}" no contexto do livro "${bookTitle}". Fale sobre sua personalidade, motivações e papel na trama de forma elegante.`
+            : `Explique o contexto ou o significado profundo do trecho "${text}" dentro do livro "${bookTitle}". Seja breve, sofisticado e vá direto ao ponto.`
         }
       ],
-      model: "llama3-8b-8192", // Modelo ultra-rápido e gratuito
-      temperature: 0.7,
+      model: "llama-3.1-8b-instant",
+      temperature: 0.6,
     });
 
-    const responseText = completion.choices[0]?.message?.content || "Não consegui processar a informação.";
+    const responseText = completion.choices[0]?.message?.content || "O Mentor não conseguiu analisar este trecho agora.";
 
     return NextResponse.json({ result: responseText });
   } catch (error: any) {
-    console.error("Erro Groq:", error);
+    console.error("Erro Groq AI:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

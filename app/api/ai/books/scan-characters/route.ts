@@ -8,17 +8,14 @@ export async function POST(req: Request) {
     const { bookTitle, author } = await req.json();
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const prompt = `Identifique os 10 personagens mais importantes do livro "${bookTitle}" de "${author}". 
-    Para cada personagem, forneça:
-    1. Nome exato (como aparece no texto).
-    2. Papel na trama (Protagonista, Antagonista, etc).
-    3. Breve descrição de personalidade e características físicas.
-    Retorne apenas um array JSON puro, sem formatação markdown, com os campos: name, role, description.`;
+    const prompt = `Liste os 10 personagens principais do livro "${bookTitle}" de "${author}". Retorne APENAS um array JSON puro com objetos contendo: name, role, description. Não use markdown.`;
 
     const result = await model.generateContent(prompt);
-    const text = result.response.text().replace(/```json|```/g, "");
+    const response = await result.response;
+    let text = response.text().replace(/```json|```/g, "").trim();
+    
     return NextResponse.json(JSON.parse(text));
-  } catch (error) {
-    return NextResponse.json({ error: "Erro ao escanear personagens" }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

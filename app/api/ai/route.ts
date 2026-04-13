@@ -1,43 +1,32 @@
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 
+// Forçamos a inicialização correta
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 export async function POST(req: Request) {
   try {
     const { text, bookTitle, action } = await req.json();
 
-    if (!text) return NextResponse.json({ error: "Sem texto" }, { status: 400 });
-
+    // Tente usar 'gemini-1.5-flash-latest' ou apenas 'gemini-1.5-flash'
     const model = genAI.getGenerativeModel({ 
       model: "gemini-1.5-flash",
-      safetySettings: [
-        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-      ],
     });
 
     let prompt = "";
-
     if (action === 'persona') {
-      prompt = `Aja como um concept artist de cinema. Com base no trecho do livro "${bookTitle}": "${text}", crie um perfil visual detalhado do personagem mencionado. Descreva vestimenta, traços faciais, aura e postura. Termine a resposta com um parágrafo em INGLÊS entre colchetes [ ] que sirva de prompt para um gerador de imagem realista.`;
+      prompt = `Aja como um especialista literário. Descreva o personagem "${text}" no contexto do livro "${bookTitle}". Se for um personagem conhecido, traga sua ficha técnica (papel, personalidade, aparência).`;
     } else {
-      prompt = `Você é o Mentor de Contexto do IBRead. Analise este trecho de "${bookTitle}": "${text}". 
-      Se for uma palavra: dê o significado e etimologia. 
-      Se for frase/parágrafo: explique o subtexto e a intenção literária sem spoilers. 
-      Seja elegante e direto.`;
+      prompt = `Explique o contexto de "${text}" no livro "${bookTitle}" de forma elegante e sem spoilers.`;
     }
 
     const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
-
-    if (!responseText) throw new Error("Resposta vazia da IA");
+    const response = await result.response;
+    const responseText = response.text();
 
     return NextResponse.json({ result: responseText });
   } catch (error: any) {
-    console.error("ERRO IA:", error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("ERRO DETALHADO:", error);
+    return NextResponse.json({ error: "Erro na IA: " + error.message }, { status: 500 });
   }
 }

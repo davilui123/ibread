@@ -8,14 +8,19 @@ export async function POST(req: Request) {
     const { bookTitle, author } = await req.json();
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const prompt = `Liste os 10 personagens principais do livro "${bookTitle}" de "${author}". Retorne APENAS um array JSON puro com objetos contendo: name, role, description. Não use markdown.`;
+    const prompt = `Liste 10 personagens do livro "${bookTitle}". Responda APENAS com um array JSON puro: [{"name": "Nome", "role": "Papel", "description": "Bio"}]. Sem markdown ou textos extras.`;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    let text = response.text().replace(/```json|```/g, "").trim();
+    const rawText = response.text().trim();
     
-    return NextResponse.json(JSON.parse(text));
+    // Limpeza de possíveis formatações que a IA coloca
+    const jsonString = rawText.replace(/```json|```/g, "").trim();
+    
+    return NextResponse.json(JSON.parse(jsonString));
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("Erro Scan:", error);
+    // Se der erro, retorna um array vazio para não quebrar o leitor
+    return NextResponse.json([]);
   }
 }

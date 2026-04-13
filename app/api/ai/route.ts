@@ -1,32 +1,38 @@
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 
-// Forçamos a inicialização correta
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 export async function POST(req: Request) {
   try {
     const { text, bookTitle, action } = await req.json();
 
-    // Tente usar 'gemini-1.5-flash-latest' ou apenas 'gemini-1.5-flash'
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
-    });
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: "API Key faltando na Vercel" }, { status: 500 });
+    }
+
+    // Usando a versão mais estável do modelo
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     let prompt = "";
     if (action === 'persona') {
-      prompt = `Aja como um especialista literário. Descreva o personagem "${text}" no contexto do livro "${bookTitle}". Se for um personagem conhecido, traga sua ficha técnica (papel, personalidade, aparência).`;
+      prompt = `Aja como um guia literário. No livro "${bookTitle}", descreva quem é o personagem "${text}". Fale sobre sua personalidade e papel na história de forma elegante.`;
     } else {
-      prompt = `Explique o contexto de "${text}" no livro "${bookTitle}" de forma elegante e sem spoilers.`;
+      prompt = `Explique o significado ou contexto de "${text}" dentro do livro "${bookTitle}". Seja breve e sofisticado.`;
     }
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const responseText = response.text();
 
+    if (!responseText) {
+      return NextResponse.json({ result: "A IA não conseguiu analisar este trecho." });
+    }
+
     return NextResponse.json({ result: responseText });
   } catch (error: any) {
-    console.error("ERRO DETALHADO:", error);
-    return NextResponse.json({ error: "Erro na IA: " + error.message }, { status: 500 });
+    console.error("ERRO IA:", error);
+    // Retorna o erro detalhado para você ver na tela o que está bloqueando
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

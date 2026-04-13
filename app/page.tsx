@@ -1,23 +1,24 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase'; // Ajuste o caminho conforme seu projeto
-import { Flame, BookOpen, User } from 'lucide-react'; // Ícones legais
+import { supabase } from '@/lib/supabaseClient'; // PADRONIZE ESTE CAMINHO
+import { Flame, BookOpen, User, Loader2 } from 'lucide-react';
+import Link from 'next/link';
 
 export default function HomePage() {
   const [user, setUser] = useState<any>(null);
   const [streak, setStreak] = useState(0);
+  const [books, setBooks] = useState<any[]>([]); // Estado para os livros
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function getDashboardData() {
-      // 1. Pega o usuário logado
       const { data: { user } } = await supabase.auth.getUser();
       
       if (user) {
         setUser(user);
 
-        // 2. Busca a chama do usuário na tabela que criamos
+        // Busca a chama
         const { data: stats } = await supabase
           .from('user_stats')
           .select('streak_count, last_read_date')
@@ -25,18 +26,25 @@ export default function HomePage() {
           .maybeSingle();
 
         if (stats) {
-          // Lógica para verificar se a chama "esfriou" (mais de 24h sem ler)
           const today = new Date().toISOString().split('T')[0];
           const yesterday = new Date();
           yesterday.setDate(yesterday.getDate() - 1);
           const yesterdayStr = yesterday.toISOString().split('T')[0];
 
           if (stats.last_read_date !== today && stats.last_read_date !== yesterdayStr) {
-            setStreak(0); // Esfriou
+            setStreak(0);
           } else {
             setStreak(stats.streak_count);
           }
         }
+
+        // BUSCA OS LIVROS (Para a Home não ficar vazia)
+        const { data: userBooks } = await supabase
+          .from('books')
+          .select('*')
+          .order('updated_at', { ascending: false });
+        
+        if (userBooks) setBooks(userBooks);
       }
       setLoading(false);
     }
@@ -44,40 +52,52 @@ export default function HomePage() {
     getDashboardData();
   }, []);
 
-  if (loading) return <div className="p-8 text-center">Carregando IBRead...</div>;
+  if (loading) return (
+    <div className="h-screen flex items-center justify-center bg-[#F8F9F7]">
+      <Loader2 className="animate-spin text-stone-300" size={32} />
+    </div>
+  );
 
   return (
-    <main className="max-w-4xl mx-auto p-6">
-      {/* Header do Dashboard */}
-      <div className="flex justify-between items-center mb-8">
+    <main className="max-w-5xl mx-auto p-8">
+      <div className="flex justify-between items-center mb-12">
         <div>
-          <h1 className="text-3xl font-bold">Olá, {user?.user_metadata?.full_name || 'Leitor'}!</h1>
-          <p className="text-gray-500">Pronto para a leitura de hoje?</p>
+          <h1 className="text-4xl font-black tracking-tight text-stone-900">
+            Olá, {user?.user_metadata?.full_name?.split(' ')[0] || 'Leitor'}!
+          </h1>
+          <p className="text-stone-500 font-medium">Sua biblioteca inteligente está pronta.</p>
         </div>
         
-        {/* O Widget da Chama na Home */}
-        <div className="bg-orange-100 border-2 border-orange-500 rounded-2xl p-4 flex items-center gap-3 shadow-sm">
-          <Flame className={`w-8 h-8 ${streak > 0 ? 'text-orange-600 fill-orange-500' : 'text-gray-400'}`} />
+        <div className="bg-orange-50 border border-orange-100 rounded-3xl px-6 py-4 flex items-center gap-4 shadow-sm">
+          <Flame className={`w-8 h-8 ${streak > 0 ? 'text-orange-500 fill-orange-500 animate-bounce' : 'text-stone-300'}`} />
           <div>
-            <p className="text-xs text-orange-800 font-bold uppercase tracking-wider">Sua Chama</p>
-            <p className="text-2xl font-black text-orange-600">{streak} dias</p>
+            <p className="text-[10px] text-orange-800 font-black uppercase tracking-widest">Streak</p>
+            <p className="text-2xl font-black text-orange-600 leading-none">{streak} dias</p>
           </div>
         </div>
       </div>
 
-      {/* Grid de Conteúdo */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white border p-6 rounded-xl hover:shadow-md transition cursor-pointer">
-          <BookOpen className="mb-4 text-blue-500" />
-          <h2 className="text-xl font-bold mb-2">Continuar Lendo</h2>
-          <p className="text-gray-600 text-sm">Volte para o livro que você parou.</p>
-        </div>
-
-        <div className="bg-white border p-6 rounded-xl hover:shadow-md transition cursor-pointer">
-          <User className="mb-4 text-purple-500" />
-          <h2 className="text-xl font-bold mb-2">Meu Perfil</h2>
-          <p className="text-gray-600 text-sm">Veja suas estatísticas e coleções.</p>
-        </div>
+      <h2 className="text-xs font-black uppercase tracking-[0.2em] text-stone-400 mb-6">Minha Estante</h2>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {books.map((b) => (
+          <Link href={`/reader/${b.id}`} key={b.id}>
+            <div className="bg-white border border-stone-100 p-6 rounded-3xl hover:shadow-xl hover:scale-[1.02] transition-all group cursor-pointer">
+              <div className="aspect-[3/4] bg-stone-100 rounded-2xl mb-4 overflow-hidden flex items-center justify-center">
+                <BookOpen className="text-stone-300 group-hover:text-blue-400 transition-colors" size={48} />
+              </div>
+              <h3 className="font-black text-stone-800 truncate">{b.title}</h3>
+              <p className="text-xs text-stone-400 font-bold uppercase">{b.author || 'Autor Desconhecido'}</p>
+              
+              {/* Barra de progresso visual */}
+              <div className="mt-4 h-1 w-full bg-stone-50 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-stone-800" 
+                  style={{ width: `${(b.current_page / (b.total_pages || 1)) * 100}%` }}
+                />
+              </div>
+            </div>
+          </Link>
+        ))}
       </div>
     </main>
   );

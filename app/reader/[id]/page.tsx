@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { ArrowLeft, Loader2, Sparkles, User, Flame, X, Sun, Moon } from 'lucide-react';
+import { ArrowLeft, Loader2, Sparkles, User, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type ThemeType = 'default' | 'sepia' | 'comfort';
@@ -16,27 +16,22 @@ export default function ReaderPage() {
   const [loadingReader, setLoadingReader] = useState(true);
   const [theme, setTheme] = useState<ThemeType>('default');
   
-  // Estados de IA e UI
   const [selectedText, setSelectedText] = useState("");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [aiResponse, setAiResponse] = useState("");
   const [loadingAi, setLoadingAi] = useState(false);
   const [activeTab, setActiveTab] = useState<'insight' | 'persona'>('insight');
   
-  // Estados de Paginação e Tempo
   const [currentPage, setCurrentPage] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [timeLeft, setTimeLeft] = useState<string>("Calculando...");
 
-  // Estados da Chama (Streak)
-  const [streak, setStreak] = useState(0);
-  const [hasReadToday, setHasReadToday] = useState(false);
-
+  // Ref para controle de leitura e tempo
   const viewerRef = useRef<HTMLDivElement>(null);
   const renditionRef = useRef<any>(null);
   const startTimeRef = useRef<number>(Date.now());
+  const hasUpdatedStreak = useRef(false);
 
-  // 1. Carregar dados do livro
   useEffect(() => {
     const fetchBook = async () => {
       const { data } = await supabase.from('books').select('*').eq('id', id).single();
@@ -46,44 +41,36 @@ export default function ReaderPage() {
       }
     };
     fetchBook();
-    fetchUserStats();
   }, [id]);
 
-  // 2. Lógica do Streak (Chama)
-  const fetchUserStats = async () => {
-    const { data: stats } = await supabase.from('user_stats').select('*').single();
-    if (stats) {
-      setStreak(stats.streak_count);
-      const today = new Date().toISOString().split('T')[0];
-      if (stats.last_read_date === today) setHasReadToday(true);
-    }
-  };
-
+  // Lógica silenciosa do Streak (Chama)
   const updateReadingStreak = async () => {
-    if (hasReadToday) return;
+    if (hasUpdatedStreak.current) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     const today = new Date().toISOString().split('T')[0];
-    const { data: stats } = await supabase.from('user_stats').select('*').single();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
 
-    let newStreak = 1;
+    const { data: stats } = await supabase.from('user_stats').select('*').eq('user_id', user.id).maybeSingle();
+
     if (stats) {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      if (stats.last_read_date === today) return;
 
+      let newStreak = 1;
       if (stats.last_read_date === yesterdayStr) {
         newStreak = stats.streak_count + 1;
-      } else if (stats.last_read_date === today) {
-        newStreak = stats.streak_count;
       }
-      await supabase.from('user_stats').update({ streak_count: newStreak, last_read_date: today }).eq('id', stats.id);
+      await supabase.from('user_stats').update({ streak_count: newStreak, last_read_date: today }).eq('user_id', user.id);
     } else {
-      await supabase.from('user_stats').insert({ streak_count: 1, last_read_date: today });
+      await supabase.from('user_stats').insert({ user_id: user.id, streak_count: 1, last_read_date: today });
     }
-    setStreak(newStreak);
-    setHasReadToday(true);
+    hasUpdatedStreak.current = true;
   };
 
-  // 3. Estimativa de Tempo
   const calculateTimeRemaining = (currentLoc: number, totalLocs: number) => {
     const now = Date.now();
     const secondsSpent = (now - startTimeRef.current) / 1000;
@@ -101,7 +88,6 @@ export default function ReaderPage() {
     return `${minutes} min para o fim`;
   };
 
-  // 4. Inicialização do EPUB
   useEffect(() => {
     if (!isEpub || !book || !viewerRef.current) {
         if (book && !isEpub) setLoadingReader(false);
@@ -121,7 +107,6 @@ export default function ReaderPage() {
         });
         renditionRef.current = rendition;
 
-        // Custom Selection Style
         rendition.hooks.content.register((contents: any) => {
           const style = contents.document.createElement("style");
           style.innerHTML = `::selection { background: rgba(0,0,0,0.1); }`;
@@ -133,7 +118,6 @@ export default function ReaderPage() {
           if (text.length > 2) setSelectedText(text);
         });
 
-        // Temas
         rendition.themes.default({ body: { "font-family": "serif !important", "padding": "40px !important" } });
         rendition.themes.register("sepia", { body: { "background": "#F4ECD8 !important", "color": "#5B4636 !important" } });
         rendition.themes.register("comfort", { body: { "background": "#1A1A1A !important", "color": "#D1D1D1 !important" } });
@@ -147,7 +131,7 @@ export default function ReaderPage() {
             await rendition.display(bookInstance.locations.cfiFromPercentage(percentage));
             setLoadingReader(false);
             
-            // Timer de 30s para validar leitura e ativar a chama
+            // Ativa a chama silenciosamente após 30 segundos de leitura
             setTimeout(() => { if(isMounted) updateReadingStreak(); }, 30000);
           }
         });
@@ -194,11 +178,12 @@ export default function ReaderPage() {
         ${theme === 'comfort' ? 'bg-[#1A1A1A] border-stone-800' : 'bg-white/80 backdrop-blur-md border-stone-200'}`}>
         
         <div className="flex items-center gap-4">
-          <button onClick={() => router.back()} className="text-stone-400 hover:text-black"><ArrowLeft size={20} /></button>
-          <div className="flex items-center gap-2 px-3 py-1 bg-orange-50 rounded-full border border-orange-100">
-            <Flame size={14} className={hasReadToday ? "text-orange-500 fill-orange-500 animate-pulse" : "text-stone-300"} />
-            <span className={`text-[10px] font-black ${hasReadToday ? "text-orange-600" : "text-stone-400"}`}>{streak}</span>
-          </div>
+          <button onClick={() => router.back()} className="text-stone-400 hover:text-black transition-colors">
+            <ArrowLeft size={20} />
+          </button>
+          <h2 className="text-[10px] font-black uppercase tracking-widest opacity-40 truncate max-w-[200px]">
+            {book?.title}
+          </h2>
         </div>
 
         <div className="flex items-center gap-3">
@@ -206,7 +191,7 @@ export default function ReaderPage() {
             {selectedText && (
               <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex gap-2">
                 <button onClick={() => callAi('insight')} className="bg-black text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
-                  <Sparkles size={12} className="animate-pulse text-orange-300" />
+                  <Sparkles size={12} className="text-orange-300" />
                   <span className="text-[10px] font-black uppercase tracking-widest">Insight</span>
                 </button>
                 <button onClick={() => callAi('persona')} className="bg-white text-stone-600 px-4 py-2 rounded-full border border-stone-200 text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
@@ -228,11 +213,9 @@ export default function ReaderPage() {
         {loadingReader && <div className="absolute inset-0 flex items-center justify-center z-50 bg-[#F8F9F7]"><Loader2 className="animate-spin text-stone-200" size={40} /></div>}
         <div ref={viewerRef} className={`h-full w-full max-w-4xl transition-all ${theme === 'comfort' ? 'bg-[#1A1A1A]' : 'bg-white'}`} />
         
-        {/* Navegação por Click */}
         <button onClick={() => renditionRef.current?.prev()} className="absolute left-0 h-full w-[15%] z-10" />
         <button onClick={() => renditionRef.current?.next()} className="absolute right-0 h-full w-[15%] z-10" />
 
-        {/* Drawer da IA */}
         <AnimatePresence>
           {isDrawerOpen && (
             <>
@@ -258,7 +241,7 @@ export default function ReaderPage() {
                   {loadingAi ? (
                     <div className="py-20 flex flex-col items-center gap-4">
                       <Loader2 className="animate-spin text-stone-300" size={40} />
-                      <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Consultando o Llama 3.1...</p>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Consultando Llama 3.1...</p>
                     </div>
                   ) : (
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="font-serif text-xl leading-loose">

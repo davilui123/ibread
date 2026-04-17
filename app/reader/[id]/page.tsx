@@ -3,8 +3,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { ArrowLeft, Loader2, Sparkles, User, X } from 'lucide-react';
+import { ArrowLeft, Loader2, Sparkles, User, X, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import TurboReader from '@/components/TurboReader';
 
 type ThemeType = 'default' | 'sepia' | 'comfort';
 
@@ -26,6 +27,10 @@ export default function ReaderPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [timeLeft, setTimeLeft] = useState<string>("Calculando...");
 
+  // Estados para o Modo Turbo
+  const [isTurboMode, setIsTurboMode] = useState(false);
+  const [pageText, setPageText] = useState("");
+
   // Ref para controle de leitura e tempo
   const viewerRef = useRef<HTMLDivElement>(null);
   const renditionRef = useRef<any>(null);
@@ -34,7 +39,7 @@ export default function ReaderPage() {
 
   useEffect(() => {
     const fetchBook = async () => {
-      const { data } = await supabase.from('books').select('*').eq('id', id).single();
+      const { data } = await supabase.from('books').select('*').eq(id).single();
       if (data) {
         setBook(data);
         setIsEpub(data.pdf_url.toLowerCase().endsWith('.epub'));
@@ -131,12 +136,19 @@ export default function ReaderPage() {
             await rendition.display(bookInstance.locations.cfiFromPercentage(percentage));
             setLoadingReader(false);
             
-            // Ativa a chama silenciosamente após 30 segundos de leitura
             setTimeout(() => { if(isMounted) updateReadingStreak(); }, 30000);
           }
         });
 
         rendition.on("relocated", async (location: any) => {
+          if (!isMounted) return;
+
+          // Extrai o texto da página atual para o TurboReader
+          try {
+            const range = renditionRef.current.getRange(location.start.cfi);
+            setPageText(range.toString());
+          } catch (e) { console.warn("Falha ao extrair texto da página"); }
+
           const percent = bookInstance.locations.percentageFromCfi(location.start.cfi);
           const currentLoc = Math.floor(percent * bookInstance.locations.length()) || 1;
           setCurrentPage(currentLoc);
@@ -181,14 +193,14 @@ export default function ReaderPage() {
           <button onClick={() => router.back()} className="text-stone-400 hover:text-black transition-colors">
             <ArrowLeft size={20} />
           </button>
-          <h2 className="text-[10px] font-black uppercase tracking-widest opacity-40 truncate max-w-[200px]">
+          <h2 className="text-[10px] font-black uppercase tracking-widest opacity-40 truncate max-w-[150px]">
             {book?.title}
           </h2>
         </div>
 
         <div className="flex items-center gap-3">
           <AnimatePresence>
-            {selectedText && (
+            {selectedText && !isTurboMode && (
               <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex gap-2">
                 <button onClick={() => callAi('insight')} className="bg-black text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
                   <Sparkles size={12} className="text-orange-300" />
@@ -201,10 +213,21 @@ export default function ReaderPage() {
             )}
           </AnimatePresence>
 
-          <div className="flex bg-stone-100 p-1 rounded-full border border-stone-200">
-            <button onClick={() => {setTheme('default'); renditionRef.current?.themes.select('default');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'default' ? 'border-blue-400' : 'border-transparent'} bg-white`} />
-            <button onClick={() => {setTheme('sepia'); renditionRef.current?.themes.select('sepia');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'sepia' ? 'border-orange-400' : 'border-transparent'} bg-[#F4ECD8]`} />
-            <button onClick={() => {setTheme('comfort'); renditionRef.current?.themes.select('comfort');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'comfort' ? 'border-stone-400' : 'border-transparent'} bg-[#1A1A1A]`} />
+          <div className="flex items-center gap-2">
+            {/* Botão Modo Turbo */}
+            <button 
+              onClick={() => setIsTurboMode(true)}
+              className="p-2.5 rounded-full bg-stone-100 text-stone-500 hover:bg-black hover:text-white transition-all duration-300"
+              title="Modo Turbo"
+            >
+              <Zap size={16} />
+            </button>
+
+            <div className="flex bg-stone-100 p-1 rounded-full border border-stone-200">
+              <button onClick={() => {setTheme('default'); renditionRef.current?.themes.select('default');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'default' ? 'border-blue-400' : 'border-transparent'} bg-white`} />
+              <button onClick={() => {setTheme('sepia'); renditionRef.current?.themes.select('sepia');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'sepia' ? 'border-orange-400' : 'border-transparent'} bg-[#F4ECD8]`} />
+              <button onClick={() => {setTheme('comfort'); renditionRef.current?.themes.select('comfort');}} className={`w-6 h-6 rounded-full border-2 ${theme === 'comfort' ? 'border-stone-400' : 'border-transparent'} bg-[#1A1A1A]`} />
+            </div>
           </div>
         </div>
       </header>
@@ -222,7 +245,7 @@ export default function ReaderPage() {
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsDrawerOpen(false)} className="absolute inset-0 bg-black/20 backdrop-blur-sm z-[50]" />
               <motion.div 
                 initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
-                className={`absolute right-0 top-0 h-full w-full max-w-md z-[60] shadow-2xl p-10 flex flex-col ${theme === 'comfort' ? 'bg-[#1A1A1A] text-stone-300' : 'bg-white text-stone-800'}`}
+                className={`absolute right-0 top-0 h-full w-full max-md z-[60] shadow-2xl p-10 flex flex-col ${theme === 'comfort' ? 'bg-[#1A1A1A] text-stone-300' : 'bg-white text-stone-800'}`}
               >
                 <div className="flex justify-between items-center mb-10">
                   <div className="flex items-center gap-3">
@@ -251,6 +274,16 @@ export default function ReaderPage() {
                 </div>
               </motion.div>
             </>
+          )}
+        </AnimatePresence>
+
+        {/* Modal do Turbo Reader */}
+        <AnimatePresence>
+          {isTurboMode && (
+            <TurboReader 
+              text={pageText} 
+              onClose={() => setIsTurboMode(false)} 
+            />
           )}
         </AnimatePresence>
       </main>

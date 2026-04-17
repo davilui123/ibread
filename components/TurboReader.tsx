@@ -17,8 +17,22 @@ export default function TurboReader({ text, onClose }: TurboReaderProps) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    const cleanText = text.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
-    setWords(cleanText.split(' '));
+    // Verificação no console para saber se o texto chegou do Reader
+    console.log("TurboReader recebeu texto:", text ? "Sim" : "Não");
+    
+    if (!text) {
+      setWords(["Arraste", "a", "página", "para", "carregar", "o", "texto"]);
+      return;
+    }
+
+    const cleanText = text
+      .replace(/<[^>]*>?/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const wordsArray = cleanText.split(' ').filter(w => w.length > 0);
+    setWords(wordsArray);
+    setCurrentIndex(0);
   }, [text]);
 
   useEffect(() => {
@@ -35,7 +49,8 @@ export default function TurboReader({ text, onClose }: TurboReaderProps) {
   }, [isPlaying, wpm, currentIndex, words.length]);
 
   const renderWord = (word: string) => {
-    const index = Math.floor(word.length * 0.35);
+    if (!word) return null;
+    const index = Math.max(1, Math.floor(word.length * 0.35));
     return (
       <div className="text-5xl md:text-7xl font-mono font-bold tracking-tight flex">
         <span className="text-stone-300">{word.substring(0, index)}</span>
@@ -46,60 +61,29 @@ export default function TurboReader({ text, onClose }: TurboReaderProps) {
   };
 
   return (
-    <motion.div 
-      initial={{ opacity: 0 }} 
-      animate={{ opacity: 1 }} 
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center p-6"
-    >
-      <button onClick={onClose} className="absolute top-8 right-8 text-stone-400 hover:text-black transition-colors">
-        <X size={32} />
-      </button>
-
-      {/* Visor das Palavras */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[200] bg-white flex flex-col items-center justify-center p-6 text-stone-900">
+      <button onClick={onClose} className="absolute top-8 right-8 text-stone-400 hover:text-black"><X size={32} /></button>
       <div className="relative w-full max-w-2xl h-40 flex items-center justify-center border-y-2 border-stone-100">
         <div className="absolute left-1/2 -translate-x-1/2 top-0 w-0.5 h-4 bg-stone-200" />
         <div className="absolute left-1/2 -translate-x-1/2 bottom-0 w-0.5 h-4 bg-stone-200" />
-        
         <AnimatePresence mode="wait">
-          <div key={currentIndex}>
-            {words[currentIndex] ? renderWord(words[currentIndex]) : <span className="text-stone-300 uppercase text-xs font-black tracking-widest">Fim da Leitura</span>}
-          </div>
+          <div key={currentIndex}>{renderWord(words[currentIndex])}</div>
         </AnimatePresence>
       </div>
-
-      {/* Controles */}
       <div className="mt-12 flex flex-col items-center gap-8 w-full max-w-xs">
         <div className="flex items-center gap-4 w-full bg-stone-50 p-4 rounded-2xl border border-stone-100">
           <Gauge size={20} className="text-stone-400" />
-          <input 
-            type="range" min="100" max="800" step="50" 
-            value={wpm} onChange={(e) => setWpm(parseInt(e.target.value))}
-            className="flex-1 accent-black cursor-pointer"
-          />
+          <input type="range" min="100" max="800" step="50" value={wpm} onChange={(e) => setWpm(parseInt(e.target.value))} className="flex-1 accent-black cursor-pointer" />
           <span className="text-xs font-black w-16 text-right">{wpm} WPM</span>
         </div>
-
         <div className="flex items-center gap-6">
-          <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 10))} className="p-3 text-stone-400 hover:text-black">
-            <ChevronLeft size={24}/>
-          </button>
-          
-          <button 
-            onClick={() => setIsPlaying(!isPlaying)}
-            className="w-20 h-20 bg-black text-white rounded-full flex items-center justify-center shadow-2xl hover:scale-105 transition-transform"
-          >
+          <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 10))} className="p-3 text-stone-400"><ChevronLeft size={24}/></button>
+          <button onClick={() => setIsPlaying(!isPlaying)} className="w-20 h-20 bg-black text-white rounded-full flex items-center justify-center shadow-2xl">
             {isPlaying ? <Pause size={32} fill="white" /> : <Play size={32} fill="white" className="ml-1" />}
           </button>
-
-          <button onClick={() => setCurrentIndex(Math.min(words.length - 1, currentIndex + 10))} className="p-3 text-stone-400 hover:text-black">
-            <ChevronRight size={24}/>
-          </button>
+          <button onClick={() => setCurrentIndex(Math.min(words.length - 1, currentIndex + 10))} className="p-3 text-stone-400"><ChevronRight size={24}/></button>
         </div>
-
-        <p className="text-[10px] font-black uppercase text-stone-300 tracking-tighter">
-          Palavra {currentIndex + 1} de {words.length}
-        </p>
+        <p className="text-[10px] font-black uppercase text-stone-300 tracking-tighter">Palavra {currentIndex + 1} de {words.length}</p>
       </div>
     </motion.div>
   );

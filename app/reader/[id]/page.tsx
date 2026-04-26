@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import { ArrowLeft, Sparkles, X, Zap, Loader2 } from 'lucide-react';
+import { ArrowLeft, Sparkles, X, Zap, Loader2, Flame, Star } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import TurboReader from '@/components/TurboReader';
 
@@ -85,9 +85,6 @@ const THEME_ORDER: ThemeType[] = ['default', 'sepia', 'kindle', 'comfort'];
 // XP por página virada
 const XP_PER_PAGE = 2;
 
-// Debounce simples para o XP
-let xpTimeout: ReturnType<typeof setTimeout> | null = null;
-
 // ─── Componente ───────────────────────────────────────────────────────────────
 
 export default function ReaderPage() {
@@ -114,6 +111,9 @@ export default function ReaderPage() {
   const [isTurboMode, setTurboMode]   = useState(false);
   const [pageText, setPageText]       = useState('');
 
+  // Toast
+  const [toast, setToast] = useState<{ icon: string; title: string; sub: string } | null>(null);
+
   // Refs
   const viewerRef        = useRef<HTMLDivElement>(null);
   const renditionRef     = useRef<any>(null);
@@ -122,7 +122,8 @@ export default function ReaderPage() {
   const hasStreakRef     = useRef(false);
   const streakTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeLockRef      = useRef<any>(null);
-  const pendingXpRef     = useRef(0); // XP acumulado aguardando flush
+  const pendingXpRef     = useRef(0);
+  const xpFlushRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Wake Lock ────────────────────────────────────────────────────────────
 
@@ -181,16 +182,22 @@ export default function ReaderPage() {
     });
   }, [id]);
 
+  const showToast = (icon: string, title: string, sub: string) => {
+    setToast({ icon, title, sub });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   // ─── Streak — dispara IMEDIATAMENTE, conta 30s a partir daqui ─────────────
 
   const updateStreak = useCallback(async () => {
     if (hasStreakRef.current) return;
+    hasStreakRef.current = true; // trava imediato para evitar duplo disparo
+
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) { hasStreakRef.current = false; return; }
 
     const today = new Date().toISOString().split('T')[0];
 
-    // upsert garante que o registro existe mesmo sem SQL prévio
     const { data: stats } = await supabase
       .from('user_stats')
       .select('streak_count, last_read_date')
@@ -198,27 +205,16 @@ export default function ReaderPage() {
       .maybeSingle();
 
     if (!stats) {
-      // Primeira vez absoluta — cria o registro completo
       await supabase.from('user_stats').insert({
-        user_id:        user.id,
-        streak_count:   1,
-        last_read_date: today,
-        xp:             0,
-        level:          1,
-        total_pages:    0,
-        weekly_pages:   0,
-        turbo_uses:     0,
-        weekly_goal:    50,
-        week_start:     today,
+        user_id: user.id, streak_count: 1, last_read_date: today,
+        xp: 0, level: 1, total_pages: 0, weekly_pages: 0,
+        turbo_uses: 0, weekly_goal: 50, week_start: today,
       });
-      hasStreakRef.current = true;
+      showToast('🔥', 'Streak iniciado!', '1 dia consecutivo');
       return;
     }
 
-    if (stats.last_read_date === today) {
-      hasStreakRef.current = true;
-      return; // já contou hoje
-    }
+    if (stats.last_read_date === today) return; // já contou hoje
 
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
@@ -229,10 +225,10 @@ export default function ReaderPage() {
       .update({ streak_count: newStreak, last_read_date: today })
       .eq('user_id', user.id);
 
-    hasStreakRef.current = true;
+    showToast('🔥', `Streak: ${newStreak} dias!`, newStreak === 1 ? 'Continue amanhã!' : 'Incrível consistência');
   }, []);
 
-  // ─── XP com debounce — flush a cada 3s de inatividade ────────────────────
+  // ─── XP com debounce ─────────────────────────────────────────────────────
 
   const flushXp = useCallback(async () => {
     const amount = pendingXpRef.current;
@@ -250,34 +246,40 @@ export default function ReaderPage() {
 
     if (!stats) return;
 
-    const newXp          = (stats.xp ?? 0) + amount;
-    const newTotalPages  = (stats.total_pages ?? 0) + amount / XP_PER_PAGE;
+    const newXp         = (stats.xp ?? 0) + amount;
+    const newTotalPages = (stats.total_pages ?? 0) + Math.floor(amount / XP_PER_PAGE);
 
-    // Reset semanal
     const today     = new Date();
     const weekStart = new Date(stats.week_start ?? today);
     const isNewWeek = (today.getTime() - weekStart.getTime()) / 86400000 >= 7;
-    const newWeekly = isNewWeek ? amount / XP_PER_PAGE : (stats.weekly_pages ?? 0) + amount / XP_PER_PAGE;
+    const newWeekly = isNewWeek
+      ? Math.floor(amount / XP_PER_PAGE)
+      : (stats.weekly_pages ?? 0) + Math.floor(amount / XP_PER_PAGE);
 
-    // Nível
     const xpForLevel    = (l: number) => Math.floor(100 * Math.pow(l, 1.6));
     const totalForLevel = (l: number) => { let t = 0; for (let i = 1; i < l; i++) t += xpForLevel(i); return t; };
-    let newLevel = stats.level ?? 1;
+    const prevLevel = stats.level ?? 1;
+    let newLevel = prevLevel;
     while (newXp >= totalForLevel(newLevel + 1)) newLevel++;
 
     await supabase.from('user_stats').update({
       xp:           newXp,
       level:        newLevel,
-      total_pages:  Math.floor(newTotalPages),
-      weekly_pages: Math.floor(newWeekly),
+      total_pages:  newTotalPages,
+      weekly_pages: newWeekly,
       ...(isNewWeek ? { week_start: today.toISOString().split('T')[0] } : {}),
     }).eq('user_id', user.id);
+
+    // Toast de subida de nível
+    if (newLevel > prevLevel) {
+      showToast('⭐', `Nível ${newLevel}!`, 'Você subiu de nível');
+    }
   }, []);
 
   const queueXp = useCallback(() => {
     pendingXpRef.current += XP_PER_PAGE;
-    if (xpTimeout) clearTimeout(xpTimeout);
-    xpTimeout = setTimeout(flushXp, 3000);
+    if (xpFlushRef.current) clearTimeout(xpFlushRef.current);
+    xpFlushRef.current = setTimeout(flushXp, 3000);
   }, [flushXp]);
 
   // ─── Tempo restante ───────────────────────────────────────────────────────
@@ -317,6 +319,12 @@ export default function ReaderPage() {
         });
         renditionRef.current = rendition;
 
+        // ← STREAK: timer começa AGORA — antes do generate que pode demorar
+        if (streakTimerRef.current) clearTimeout(streakTimerRef.current);
+        streakTimerRef.current = setTimeout(() => {
+          if (mounted) updateStreak();
+        }, 30000);
+
         // Seleção de texto → IA
         rendition.on('selected', (_: string, contents: any) => {
           const t = contents.window.getSelection().toString().trim();
@@ -351,12 +359,6 @@ export default function ReaderPage() {
           const pct = (book.current_page || 0) / (total || 1);
           await rendition.display(bi.locations.cfiFromPercentage(pct > 0 ? pct : 0));
           setLoading(false);
-
-          // ← Streak: timer começa AGORA, após o livro estar pronto
-          if (streakTimerRef.current) clearTimeout(streakTimerRef.current);
-          streakTimerRef.current = setTimeout(() => {
-            if (mounted) updateStreak();
-          }, 30000);
         });
 
         rendition.on('relocated', async (location: any) => {
@@ -398,8 +400,9 @@ export default function ReaderPage() {
     return () => {
       mounted = false;
       if (streakTimerRef.current) clearTimeout(streakTimerRef.current);
-      if (xpTimeout) clearTimeout(xpTimeout);
-      flushXp(); // garante flush ao sair
+      if (xpFlushRef.current) clearTimeout(xpFlushRef.current);
+      // Flush síncrono via beacon para não perder XP ao sair da página
+      if (pendingXpRef.current > 0) flushXp();
       renditionRef.current?.destroy();
     };
   }, [isEpub, book, id]);
@@ -581,6 +584,25 @@ export default function ReaderPage() {
           {isTurboMode && <TurboReader text={pageText} onClose={() => setTurboMode(false)} />}
         </AnimatePresence>
       </main>
+
+      {/* ── TOAST ── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 60, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+            className="fixed bottom-28 left-1/2 -translate-x-1/2 z-[100] bg-[#0A0A0A] text-white rounded-2xl px-5 py-4 flex items-center gap-3 shadow-2xl shadow-black/30 min-w-[200px]"
+          >
+            <span className="text-2xl">{toast.icon}</span>
+            <div>
+              <p className="text-sm font-bold leading-tight">{toast.title}</p>
+              <p className="text-[10px] text-stone-400 mt-0.5">{toast.sub}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── FOOTER ── */}
       <AnimatePresence>

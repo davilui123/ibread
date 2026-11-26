@@ -46,6 +46,26 @@ export default function BookUpload({
 
   const sanitizeFileName = (name: string) => name.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
 
+  const detectBookFormat = async (selectedFile: File): Promise<'pdf' | 'epub' | null> => {
+    try {
+      const header = new Uint8Array(await selectedFile.slice(0, 4).arrayBuffer());
+      // %PDF
+      if (header[0] === 0x25 && header[1] === 0x50 && header[2] === 0x44 && header[3] === 0x46) {
+        return 'pdf';
+      }
+      // PK (ZIP / EPUB)
+      if (header[0] === 0x50 && header[1] === 0x4b) {
+        return 'epub';
+      }
+    } catch {
+      // ignora erro ao ler header
+    }
+    const lowerName = selectedFile.name.toLowerCase();
+    if (lowerName.endsWith('.pdf') || selectedFile.type === 'application/pdf') return 'pdf';
+    if (lowerName.endsWith('.epub') || selectedFile.type === 'application/epub+zip') return 'epub';
+    return null;
+  };
+
   const handleTitleBlur = async () => {
     if (isSearching || !formData.title || formData.title.length < 3) return;
     setIsSearching(true);
@@ -82,13 +102,24 @@ export default function BookUpload({
       const currentUser = user ?? (await supabase.auth.getUser()).data.user;
       if (!currentUser) throw new Error('Você precisa estar autenticado para enviar livros.');
 
-      // 1. Upload do Arquivo (PDF ou ePUB)
-      const cleanFileName = sanitizeFileName(file.name);
+      // 1. Upload do Arquivo (PDF ou ePUB) garantindo extensão real pelos magic bytes
+      const detectedFormat = await detectBookFormat(file);
+      let cleanFileName = sanitizeFileName(file.name);
+      if (detectedFormat) {
+        cleanFileName = cleanFileName.replace(/\.(pdf|epub)$/i, '');
+        cleanFileName = `${cleanFileName}.${detectedFormat}`;
+      }
       const filePath = `files/${currentUser.id}/${Date.now()}_${cleanFileName}`;
+      const contentType =
+        detectedFormat === 'pdf'
+          ? 'application/pdf'
+          : detectedFormat === 'epub'
+          ? 'application/epub+zip'
+          : file.type || 'application/octet-stream';
 
       const { error: fileError } = await supabase.storage
         .from('pdfs')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file, { upsert: true, contentType });
 
       if (fileError) throw new Error(`Erro no arquivo: ${fileError.message}`);
 

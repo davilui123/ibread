@@ -120,7 +120,8 @@ function ReaderContent() {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [book, setBook] = useState<Book | null>(null);
-  const [isEpub, setIsEpub] = useState(false);
+  const [fileFormat, setFileFormat] = useState<'epub' | 'pdf' | null>(null);
+  const isEpub = fileFormat === 'epub';
   const [pdfPublicUrl, setPdfPublicUrl] = useState<string | null>(null);
   const [loadingReader, setLoading] = useState(true);
   const [readerError, setReaderError] = useState<string | null>(null);
@@ -230,13 +231,33 @@ function ReaderContent() {
 
       const loadedBook = bookRes.data as Book;
       setBook(loadedBook);
-      const epubFlag = Boolean(loadedBook.pdf_url?.toLowerCase().endsWith('.epub'));
-      setIsEpub(epubFlag);
 
-      if (!epubFlag && loadedBook.pdf_url) {
-        const { data: { publicUrl } } = supabase.storage
-          .from('pdfs')
-          .getPublicUrl(loadedBook.pdf_url);
+      const { data: { publicUrl } } = supabase.storage
+        .from('pdfs')
+        .getPublicUrl(loadedBook.pdf_url || '');
+
+      const lowerUrl = (loadedBook.pdf_url || '').toLowerCase();
+      let detectedFormat: 'epub' | 'pdf' = lowerUrl.endsWith('.pdf') ? 'pdf' : 'epub';
+      if (publicUrl) {
+        try {
+          const headRes = await fetch(publicUrl, { headers: { Range: 'bytes=0-3' } });
+          if (headRes.ok || headRes.status === 206) {
+            const bytes = new Uint8Array(await headRes.arrayBuffer());
+            if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+              detectedFormat = 'pdf';
+            } else if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
+              detectedFormat = 'epub';
+            }
+          }
+        } catch {
+          // fallback para extensão do arquivo
+        }
+      }
+
+      if (!active) return;
+      setFileFormat(detectedFormat);
+
+      if (detectedFormat === 'pdf' && loadedBook.pdf_url) {
         setPdfPublicUrl(publicUrl);
         const startPage = queryPage ? Number(queryPage) : loadedBook.current_page || 1;
         setCurrentPage(Math.max(1, startPage));
@@ -451,9 +472,16 @@ function ReaderContent() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const ePub = (ePubModule as any).default || ePubModule;
         const { data: { publicUrl } } = supabase.storage.from('pdfs').getPublicUrl(bookPdfUrl!);
-        const bi = ePub(publicUrl);
+        const bi = ePub(publicUrl, { openAs: 'epub' });
         localBook = bi;
         bookInstanceRef.current = bi;
+
+        bi.on('openFailed', () => {
+          if (mounted) {
+            setReaderError('Não foi possível abrir este arquivo ePUB (arquivo inválido ou corrompido).');
+            setLoading(false);
+          }
+        });
 
         const rendition = bi.renderTo(viewerRef.current, {
           width: '100%',
@@ -501,6 +529,7 @@ function ReaderContent() {
         applyThemeRef.current = applyEpubTheme;
 
         await bi.ready;
+        if (!mounted) return;
 
         // Carrega sumário (TOC)
         try {
@@ -514,21 +543,10 @@ function ReaderContent() {
           // sem TOC embutido
         }
 
-        await bi.locations.generate(1024);
+        // Exibe o livro imediatamente (CFI exato ou capítulo inicial) antes de indexar todas as páginas
+        const initialTarget = queryCfi || initialCfi || undefined;
+        await rendition.display(initialTarget);
         if (!mounted) return;
-
-        const total = bi.locations.length();
-        setTotalPages(total);
-
-        // Posição exata por CFI (?cfi= -> book.last_cfi -> fallback por página)
-        const targetDisplay =
-          queryCfi ||
-          initialCfi ||
-          (initialPage > 0 && total > 0
-            ? bi.locations.cfiFromPercentage(Math.min(0.999, initialPage / total))
-            : undefined);
-
-        await rendition.display(targetDisplay);
 
         // Restaura destaques visuais salvos
         highlights.forEach((hl) => {
@@ -545,7 +563,7 @@ function ReaderContent() {
           }
         });
 
-        if (mounted) setLoading(false);
+        setLoading(false);
 
         let isFirstRelocated = true;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -564,18 +582,24 @@ function ReaderContent() {
             if (match) setCurrentChapter(match.label);
           }
 
-          const totalLocs = bi.locations.length();
-          const pctLoc = cfi ? bi.locations.percentageFromCfi(cfi) : 0;
-          const current = Math.max(1, Math.round(pctLoc * totalLocs) || 1);
+          const totalLocs = bi.locations.length() || totalPagesRef.current;
+          const pctLoc = cfi && bi.locations.length() > 0 ? bi.locations.percentageFromCfi(cfi) : 0;
+          const current =
+            bi.locations.length() > 0
+              ? Math.max(1, Math.round(pctLoc * totalLocs) || 1)
+              : Math.max(1, initialPage || 1);
+
           setCurrentPage(current);
-          setTotalPages(totalLocs);
-          setTimeLeft(calcTime(current, totalLocs));
+          if (totalLocs > 0) {
+            setTotalPages(totalLocs);
+            setTimeLeft(calcTime(current, totalLocs));
+          }
 
           await supabase
             .from('books')
             .update({
               current_page: current,
-              total_pages: totalLocs,
+              ...(totalLocs > 0 ? { total_pages: totalLocs } : {}),
               last_cfi: cfi,
               updated_at: new Date().toISOString(),
             })
@@ -586,6 +610,26 @@ function ReaderContent() {
             return;
           }
           queueXp();
+        });
+
+        // Gera mapa de localizações em segundo plano para o slider e contagem total de páginas
+        bi.locations.generate(1024).then(async () => {
+          if (!mounted) return;
+          const total = bi.locations.length();
+          setTotalPages(total);
+
+          if (!queryCfi && !initialCfi && initialPage > 1 && total > 0) {
+            await rendition.display(
+              bi.locations.cfiFromPercentage(Math.min(0.999, initialPage / total))
+            );
+          } else if (currentCfiRef.current && total > 0) {
+            const pctLoc = bi.locations.percentageFromCfi(currentCfiRef.current);
+            const current = Math.max(1, Math.round(pctLoc * total) || 1);
+            setCurrentPage(current);
+            setTimeLeft(calcTime(current, total));
+          }
+        }).catch(() => {
+          // ignora erro na geração de localizações
         });
       } catch (err) {
         console.error('Erro ao carregar EPUB:', err);
@@ -612,7 +656,7 @@ function ReaderContent() {
   // ─── Timer de Streak para PDF ─────────────────────────────────────────────
 
   useEffect(() => {
-    if (!bookId || !userId || isEpub) return;
+    if (!bookId || !userId || fileFormat !== 'pdf') return;
     if (streakTimerRef.current) clearTimeout(streakTimerRef.current);
     streakTimerRef.current = setTimeout(() => {
       updateStreak();
@@ -623,7 +667,7 @@ function ReaderContent() {
       if (xpFlushRef.current) clearTimeout(xpFlushRef.current);
       if (pendingXpRef.current > 0) flushXp();
     };
-  }, [bookId, userId, isEpub, updateStreak, flushXp]);
+  }, [bookId, userId, fileFormat, updateStreak, flushXp]);
 
   // ─── Callbacks do PDF ─────────────────────────────────────────────────────
 
